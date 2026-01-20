@@ -29,7 +29,8 @@ async def timeout_watcher(bot):
         now = time.time()
         checked = set()
 
-        for user_id, (partner_id, partner_chat_id) in list(ACTIVE_CHATS.items()):
+        for user_id, (partner_id, partner_chat_id, session_id) in list(ACTIVE_CHATS.items()):
+
             if user_id in checked:
                 continue
 

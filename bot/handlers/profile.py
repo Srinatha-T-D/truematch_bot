@@ -67,9 +67,10 @@ async def profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await query.edit_message_text(
                 text=(
-                    "⏳ *Searching for a match...*\n\n"
-                    "You will be connected anonymously.\n"
-                    "Please wait..."
+                    "✅ *You’re all set!*\n\n"
+                    "🔍 Use /find to start chatting\n"
+                    "🎁 Use /invite to invite friends & earn rewards\n"
+                    "📜 Use /rules to read guidelines"
                 ),
                 parse_mode="Markdown",
             )
@@ -77,4 +78,3 @@ async def profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
         # 🚀 NOW MATCH
-        await enqueue_for_match(update, context)

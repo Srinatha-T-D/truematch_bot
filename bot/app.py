@@ -25,7 +25,13 @@ from bot.handlers.match import match_command, next_command
 from bot.handlers.chat import chat_message
 from bot.handlers.disconnect import disconnect_callback
 from bot.handlers.vipstatus import vipstatus_command
+from bot.handlers.next import next_command
+from bot.handlers.rules import rules_command
+from bot.handlers.invite import invite_command
+from bot.handlers.refstats import refstats_command
+from bot.handlers.invites import invites_command
 from bot.handlers.stop import stop_command
+from bot.handlers.error import error_handler
 from bot.handlers.admin_history import chat_history_command, view_chat_command
 from bot.handlers.admin_audit import (
     active_chats_command,
@@ -94,6 +100,12 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("force_stop", force_stop_command))
     application.add_handler(CommandHandler("chat_history", chat_history_command))
     application.add_handler(CommandHandler("view_chat", view_chat_command))
+    application.add_handler(CommandHandler("invite", invite_command))
+    application.add_handler(CommandHandler("rules", rules_command))
+    application.add_handler(CommandHandler("next", next_command))
+    application.add_handler(CommandHandler("invites", invites_command))
+    application.add_handler(CommandHandler("refstats", refstats_command))
+    application.add_error_handler(error_handler)
 
     # ---------------- CALLBACKS ----------------
     application.add_handler(

@@ -69,3 +69,6 @@ if not POSTGRES_PASSWORD:
 ADMIN_IDS = {
     659916146,   # <-- YOUR Telegram ID
 }
+
+
+REFERRAL_BONUS_DAYS = int(os.getenv("REFERRAL_BONUS_DAYS", "3"))

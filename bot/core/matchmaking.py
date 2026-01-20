@@ -72,16 +72,23 @@ async def _match_users(
 
     logger.info(f"Matched users {user_id} <-> {partner_id} | session={session_id}")
 
+    match_text = (
+        "🎉 *You are now connected anonymously!*\n\n"
+        "💬 Say hi and start chatting\n"
+        "❌ Tap Disconnect to end the chat\n"
+        "🚩 You can report after the chat ends"
+    )
+
     await context.bot.send_message(
         chat_id=chat_id,
-        text="🎉 *You are now connected anonymously!*",
+        text=match_text,
         reply_markup=disconnect_keyboard(),
         parse_mode="Markdown",
     )
 
     await context.bot.send_message(
         chat_id=partner_chat_id,
-        text="🎉 *You are now connected anonymously!*",
+        text=match_text,
         reply_markup=disconnect_keyboard(),
         parse_mode="Markdown",
     )

@@ -38,15 +38,22 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Clear active chat mapping
         disconnect_users(user.id)
 
-        # Notify both sides
+        # Notify current user (POLISHED UX)
         await context.bot.send_message(
             chat_id=chat_id,
-            text="🛑 You have stopped the chat.",
+            text=(
+                "❌ Chat ended.\n\n"
+                "🔁 What would you like to do next?\n\n"
+                "/find   – Find a new chat\n"
+                "/stop   – Exit matchmaking\n"
+                "/invite – Invite friends & earn rewards"
+            ),
         )
 
+        # Notify partner (neutral & safe)
         await context.bot.send_message(
             chat_id=partner_chat_id,
-            text="❌ Your partner has stopped the chat.",
+            text="❌ Chat ended.",
         )
 
         # Remove both users from queues
@@ -63,7 +70,10 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await context.bot.send_message(
             chat_id=chat_id,
-            text="🛑 You have stopped matchmaking.",
+            text=(
+                "🛑 You have exited matchmaking.\n\n"
+                "Use /find to start a new chat anytime."
+            ),
         )
 
     # ==========================

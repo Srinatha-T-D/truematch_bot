@@ -39,25 +39,30 @@ async def _disconnect(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    partner_user_id, partner_chat_id = partner
+    # ✅ FIX: unpack all 3 values (session_id is unused here)
+    partner_user_id, partner_chat_id, session_id = partner
 
     # ✅ Correct call (single argument)
     disconnect_users(user.id)
 
+    # Notify current user
     await context.bot.send_message(
         chat_id=chat_id,
-        text="❌ You have disconnected.",
+        text="❌ Chat ended.",
     )
-    # after notifying user about disconnect
+
+    # Show report option AFTER chat ends
     await context.bot.send_message(
-       chat_id=chat_id,
-       text="Chat ended.",
-       reply_markup=report_keyboard(),
+        chat_id=chat_id,
+        text="You can report this chat if needed.",
+        reply_markup=report_keyboard(),
     )
+
+    # Notify partner
     try:
         await context.bot.send_message(
             chat_id=partner_chat_id,
-            text="❌ Your partner has disconnected.",
+            text="❌ Chat ended.",
         )
     except Exception:
         pass
