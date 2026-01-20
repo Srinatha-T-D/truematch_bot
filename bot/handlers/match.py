@@ -71,6 +71,19 @@ async def enqueue_for_match(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+    # ==========================
+    # ✅ UX POLISH (NEW)
+    # ==========================
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "⏳ *Connecting you to someone…*\n\n"
+            "You’ll be matched anonymously.\n"
+            "Please wait."
+        ),
+        parse_mode="Markdown",
+    )
+
     # ✅ Set cooldown only when enqueue is valid
     await set_cooldown(user.id)
 

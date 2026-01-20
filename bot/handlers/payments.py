@@ -20,51 +20,16 @@ logger = logging.getLogger(__name__)
 # ======================================================
 
 VIP_PLANS = {
-    # ---------- VIP LITE ----------
-    "vip_lite_1d": {
-        "title": "VIP Lite — 1 Day",
-        "stars": 49,
-        "days": 1,
-        "tier": "VIP Lite",
-    },
-    "vip_lite_7d": {
-        "title": "VIP Lite — 7 Days",
-        "stars": 99,
-        "days": 7,
-        "tier": "VIP Lite",
-    },
-
-    # ---------- VIP ----------
-    "vip_30d": {
-        "title": "VIP — 30 Days",
-        "stars": 299,
-        "days": 30,
-        "tier": "VIP",
-    },
-    "vip_90d": {
-        "title": "VIP — 3 Months",
-        "stars": 899,
-        "days": 90,
-        "tier": "VIP",
-    },
-
-    # ---------- SUPER VIP ----------
-    "super_vip_180d": {
-        "title": "Super VIP — 6 Months",
-        "stars": 1799,
-        "days": 180,
-        "tier": "Super VIP",
-    },
-    "super_vip_365d": {
-        "title": "Super VIP — 1 Year",
-        "stars": 2999,
-        "days": 365,
-        "tier": "Super VIP",
-    },
+    "vip_lite_1d": {"title": "VIP Lite — 1 Day", "stars": 49, "days": 1, "tier": "VIP Lite"},
+    "vip_lite_7d": {"title": "VIP Lite — 7 Days", "stars": 99, "days": 7, "tier": "VIP Lite"},
+    "vip_30d": {"title": "VIP — 30 Days", "stars": 299, "days": 30, "tier": "VIP"},
+    "vip_90d": {"title": "VIP — 3 Months", "stars": 899, "days": 90, "tier": "VIP"},
+    "super_vip_180d": {"title": "Super VIP — 6 Months", "stars": 1799, "days": 180, "tier": "Super VIP"},
+    "super_vip_365d": {"title": "Super VIP — 1 Year", "stars": 2999, "days": 365, "tier": "Super VIP"},
 }
 
 # ======================================================
-# STEP 1 — SHOW TIERS
+# SHOW VIP MENU
 # ======================================================
 
 async def send_vip_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -81,7 +46,7 @@ async def send_vip_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ======================================================
-# STEP 2 — SHOW PLANS FOR TIER
+# SHOW PLANS
 # ======================================================
 
 async def vip_tier_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -98,15 +63,10 @@ async def vip_tier_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not tier:
         return
 
-    keyboard = []
-    for key, plan in VIP_PLANS.items():
-        if plan["tier"] == tier:
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"{plan['title']} ⭐{plan['stars']}",
-                    callback_data=f"vip:buy:{key}",
-                )
-            ])
+    keyboard = [
+        [InlineKeyboardButton(f"{p['title']} ⭐{p['stars']}", callback_data=f"vip:buy:{k}")]
+        for k, p in VIP_PLANS.items() if p["tier"] == tier
+    ]
 
     await query.message.edit_text(
         text=f"⭐ *{tier} plans:*",
@@ -115,7 +75,7 @@ async def vip_tier_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ======================================================
-# STEP 3 — SEND STARS INVOICE
+# SEND INVOICE
 # ======================================================
 
 async def send_vip_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -132,23 +92,49 @@ async def send_vip_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title=plan["title"],
         description=f"Unlimited anonymous chats for {plan['days']} days",
         payload=plan_key,
-        provider_token="",   # REQUIRED empty for Stars
+        provider_token="",   # required empty for Stars
         currency="XTR",
         prices=[LabeledPrice(plan["title"], plan["stars"])],
     )
 
 # ======================================================
-# STARS CALLBACKS
+# PRE-CHECKOUT (FAILED PAYMENTS LOGGED HERE)
 # ======================================================
 
 async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.pre_checkout_query.answer(ok=True)
+    query = update.pre_checkout_query
+    plan_key = query.invoice_payload
+    plan = VIP_PLANS.get(plan_key)
 
+    # Always accept valid plans
+    if plan:
+        await query.answer(ok=True)
+        return
+
+    # ❌ Invalid / failed payment
+    user_id = query.from_user.id
+    amount = plan["stars"] if plan else 0
+
+    await execute(
+        """
+        INSERT INTO payments (user_id, amount, provider, status)
+        VALUES ($1, $2, 'telegram_stars', 'FAILED')
+        """,
+        user_id,
+        amount,
+    )
+
+    logger.warning(f"PAYMENT FAILED | user={user_id} | payload={plan_key}")
+
+    await query.answer(ok=False, error_message="Payment failed. Please try again.")
+
+# ======================================================
+# SUCCESSFUL PAYMENT
+# ======================================================
 
 async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payment = update.message.successful_payment
     plan_key = payment.invoice_payload
-
     plan = VIP_PLANS.get(plan_key)
     if not plan:
         return
@@ -156,7 +142,6 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
     user_id = update.effective_user.id
     now = datetime.utcnow()
 
-    # 🔍 FETCH EXISTING VIP
     row = await fetch_one(
         "SELECT vip_until FROM users WHERE user_id = $1",
         user_id,
@@ -164,25 +149,29 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
 
     current_vip_until = row["vip_until"] if row and row["vip_until"] else None
 
-    # 🔥 AUTO-EXTENSION LOGIC
     if current_vip_until and current_vip_until > now:
         new_vip_until = current_vip_until + timedelta(days=plan["days"])
     else:
         new_vip_until = now + timedelta(days=plan["days"])
 
-    # 💾 SAVE
     await execute(
-        """
-        UPDATE users
-        SET vip_until = $1
-        WHERE user_id = $2
-        """,
+        "UPDATE users SET vip_until = $1 WHERE user_id = $2",
         new_vip_until,
         user_id,
     )
 
+    # ✅ SUCCESS PAYMENT LOG
+    await execute(
+        """
+        INSERT INTO payments (user_id, amount, provider, status)
+        VALUES ($1, $2, 'telegram_stars', 'SUCCESS')
+        """,
+        user_id,
+        plan["stars"],
+    )
+
     logger.info(
-        f"VIP EXTENDED | user={user_id} | tier={plan['tier']} | until={new_vip_until}"
+        f"PAYMENT SUCCESS | user={user_id} | tier={plan['tier']} | until={new_vip_until}"
     )
 
     await update.message.reply_text(

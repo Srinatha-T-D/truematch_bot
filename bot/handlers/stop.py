@@ -76,7 +76,3 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ),
         )
 
-    # ==========================
-    # CLEAR SESSION STATE
-    # ==========================
-    context.user_data.clear()

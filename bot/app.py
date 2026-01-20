@@ -31,7 +31,14 @@ from bot.handlers.invite import invite_command
 from bot.handlers.refstats import refstats_command
 from bot.handlers.invites import invites_command
 from bot.handlers.stop import stop_command
+from bot.handlers.help import help_handler
+from bot.handlers.admin_revenue import revenue_handler
+from bot.handlers.admin_systemhealth import systemhealth_handler
+from bot.handlers.admin_help import adminhelp_handler
+from bot.handlers.admin_readchat import readchat_handler
 from bot.handlers.error import error_handler
+from bot.handlers.admin_ban import ban_handler, unban_handler
+from bot.handlers.admin_alerts import alerts_handler
 from bot.handlers.admin_history import chat_history_command, view_chat_command
 from bot.handlers.admin_audit import (
     active_chats_command,
@@ -106,6 +113,14 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("invites", invites_command))
     application.add_handler(CommandHandler("refstats", refstats_command))
     application.add_error_handler(error_handler)
+    application.add_handler(readchat_handler)
+    application.add_handler(revenue_handler)
+    application.add_handler(systemhealth_handler)
+    application.add_handler(help_handler)
+    application.add_handler(adminhelp_handler)
+    application.add_handler(alerts_handler)
+    application.add_handler(ban_handler)
+    application.add_handler(unban_handler)
 
     # ---------------- CALLBACKS ----------------
     application.add_handler(
