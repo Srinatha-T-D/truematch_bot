@@ -1,0 +1,66 @@
+# bot/app.py
+
+import logging
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    PreCheckoutQueryHandler,
+    filters,
+)
+
+from bot.config.settings import BOT_TOKEN
+
+# Handlers
+from bot.handlers.start import start_handler
+from bot.handlers.intent import intent_callback
+from bot.handlers.match import match_command, next_command
+from bot.handlers.chat import chat_message
+from bot.handlers.disconnect import disconnect_command, disconnect_callback
+from bot.handlers.payments import (
+    precheckout_handler,
+    successful_payment_handler,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def create_application() -> Application:
+    """
+    Creates and configures the Telegram Application
+    """
+
+    application = Application.builder().token(BOT_TOKEN).build()
+
+    # ------------------------------------------------------------
+    # COMMAND HANDLERS
+    # ------------------------------------------------------------
+    application.add_handler(CommandHandler("start", start_handler))
+    application.add_handler(CommandHandler("match", match_command))
+    application.add_handler(CommandHandler("disconnect", disconnect_command))
+
+    # ------------------------------------------------------------
+    # CALLBACK QUERY HANDLERS (INLINE BUTTONS)
+    # ------------------------------------------------------------
+    application.add_handler(CallbackQueryHandler(intent_callback, pattern="^intent:"))
+    application.add_handler(CallbackQueryHandler(disconnect_callback, pattern="^chat:"))
+
+    # ------------------------------------------------------------
+    # TELEGRAM STARS PAYMENTS
+    # ------------------------------------------------------------
+    application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+    application.add_handler(
+        MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler)
+    )
+
+    # ------------------------------------------------------------
+    # CHAT MESSAGE HANDLER (MUST BE LAST)
+    # ------------------------------------------------------------
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, chat_message)
+    )
+
+    logger.info("✅ Telegram application created and handlers registered")
+
+    return application
