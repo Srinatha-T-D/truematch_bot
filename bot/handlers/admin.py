@@ -1,12 +1,14 @@
 # bot/handlers/admin.py
+# Admin commands (stats, users, grantvip)
 
 import logging
 from datetime import datetime, timedelta, timezone
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from bot.config.settings import ADMIN_IDS
-from bot.core.database import fetch_one, fetch_all, execute
+from bot.core.db import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +22,8 @@ def _is_admin(user_id: int) -> bool:
 
 
 async def _unauthorized(update: Update):
-    await update.message.reply_text("❌ Unauthorized")
+    if update.message:
+        await update.message.reply_text("❌ Unauthorized")
 
 
 # ============================================================
@@ -28,29 +31,36 @@ async def _unauthorized(update: Update):
 # ============================================================
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+    if not update.message:
+        return
 
+    user = update.effective_user
     if not _is_admin(user.id):
         await _unauthorized(update)
         return
 
-    total_users = await fetch_one(
-        "SELECT COUNT(*) AS count FROM users"
-    )
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM users")
+            total_users = cur.fetchone()[0]
 
-    vip_users = await fetch_one(
-        """
-        SELECT COUNT(*) AS count
-        FROM users
-        WHERE vip_until IS NOT NULL
-          AND vip_until > NOW()
-        """
-    )
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM users
+                WHERE vip_until IS NOT NULL
+                  AND vip_until > NOW()
+                """
+            )
+            vip_users = cur.fetchone()[0]
+    finally:
+        conn.close()
 
     await update.message.reply_text(
-        f"📊 *AnonyLink Stats*\n\n"
-        f"👥 Total users: {total_users['count']}\n"
-        f"⭐ Active VIP users: {vip_users['count']}",
+        "📊 *TrueMatch Stats*\n\n"
+        f"👥 Total users: *{total_users}*\n"
+        f"⭐ Active VIP users: *{vip_users}*",
         parse_mode="Markdown",
     )
 
@@ -60,20 +70,28 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================================
 
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+    if not update.message:
+        return
 
+    user = update.effective_user
     if not _is_admin(user.id):
         await _unauthorized(update)
         return
 
-    rows = await fetch_all(
-        """
-        SELECT user_id, created_at, trials_left, vip_until
-        FROM users
-        ORDER BY created_at DESC
-        LIMIT 10
-        """
-    )
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id, created_at, trials_left, vip_until
+                FROM users
+                ORDER BY created_at DESC
+                LIMIT 10
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
 
     if not rows:
         await update.message.reply_text("No users found.")
@@ -83,9 +101,10 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = ["👥 *Last 10 Users:*"]
     for r in rows:
-        vip = "✅" if r["vip_until"] and r["vip_until"] > now else "❌"
+        vip_active = r["vip_until"] and r["vip_until"] > now
+        vip_icon = "✅" if vip_active else "❌"
         lines.append(
-            f"- `{r['user_id']}` | Trials: {r['trials_left']} | VIP: {vip}"
+            f"- `{r['user_id']}` | Trials: {r['trials_left']} | VIP: {vip_icon}"
         )
 
     await update.message.reply_text(
@@ -95,64 +114,76 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================
-# /grantvip <user_id> <days> — ADMIN ONLY
+# /grantvip <user_id> <days>
 # ============================================================
 
 async def grantvip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admin = update.effective_user
+    user_id = update.effective_user.id
 
-    if not _is_admin(admin.id):
-        await _unauthorized(update)
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
         return
 
-    if len(context.args) != 2:
+    if not context.args or len(context.args) < 2:
         await update.message.reply_text(
-            "Usage:\n/grantvip <user_id> <days>\n\n"
-            "Example:\n/grantvip 659916146 365"
+            "Usage: /grantvip <user_id> <days>"
         )
         return
 
     try:
-        target_user_id = int(context.args[0])
+        target_user_id = str(context.args[0])   # ✅ TEXT, not int
         days = int(context.args[1])
+        if days <= 0:
+            raise ValueError
     except ValueError:
-        await update.message.reply_text("❌ user_id and days must be numbers")
+        await update.message.reply_text(
+            "❌ Invalid arguments.\nUsage: /grantvip <user_id> <days>"
+        )
         return
 
-    now = datetime.now(timezone.utc)
+    conn = get_db()
+    with conn.cursor() as cur:
+        # Ensure user exists
+        cur.execute(
+            """
+            INSERT INTO users (user_id)
+            VALUES (%s)
+            ON CONFLICT (user_id) DO NOTHING
+            """,
+            (target_user_id,),
+        )
 
-    # 🔍 Fetch existing VIP if user exists
-    row = await fetch_one(
-        "SELECT vip_until FROM users WHERE user_id = $1",
-        target_user_id,
-    )
+        # Grant / extend VIP
+        cur.execute(
+            """
+            UPDATE users
+            SET vip_until = GREATEST(
+                COALESCE(vip_until, NOW()),
+                NOW()
+            ) + (%s || ' days')::INTERVAL
+            WHERE user_id = %s
+            RETURNING vip_until
+            """,
+            (days, target_user_id),
+        )
 
-    current_vip_until = row["vip_until"] if row and row["vip_until"] else None
+        row = cur.fetchone()
+        conn.commit()
 
-    if current_vip_until and current_vip_until > now:
-        new_vip_until = current_vip_until + timedelta(days=days)
-    else:
-        new_vip_until = now + timedelta(days=days)
+    conn.close()
 
-    # ✅ UPSERT USER + VIP
-    await execute(
-        """
-        INSERT INTO users (user_id, trials_left, vip_until)
-        VALUES ($1, 0, $2)
-        ON CONFLICT (user_id)
-        DO UPDATE SET vip_until = EXCLUDED.vip_until
-        """,
-        target_user_id,
-        new_vip_until,
-    )
+    if not row:
+        await update.message.reply_text(
+            f"❌ Failed to grant VIP to `{target_user_id}`",
+            parse_mode="Markdown",
+        )
+        return
 
-    logger.info(
-        f"ADMIN VIP GRANT | admin={admin.id} | user={target_user_id} | until={new_vip_until}"
-    )
+    vip_until = row["vip_until"]
 
     await update.message.reply_text(
-        f"⭐ *VIP Granted Successfully*\n\n"
-        f"User: `{target_user_id}`\n"
-        f"Valid until: {new_vip_until.strftime('%Y-%m-%d %H:%M UTC')}",
+        f"✅ *VIP Granted Successfully!*\n\n"
+        f"👤 User ID: `{target_user_id}`\n"
+        f"⏳ Valid until: `{vip_until}`",
         parse_mode="Markdown",
     )

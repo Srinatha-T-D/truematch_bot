@@ -22,6 +22,10 @@ HELP_TEXT = (
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Safety: ignore non-message updates
+    if not update.message:
+        return
+
     await update.message.reply_text(
         HELP_TEXT,
         parse_mode="Markdown",
@@ -29,4 +33,5 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# Exportable handler (consistent with other modules)
 help_handler = CommandHandler("help", help_command)

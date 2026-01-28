@@ -1,44 +1,43 @@
 # bot/config/settings.py
+# SINGLE SOURCE OF TRUTH CONFIG
+# Compatible with truematch_clean
 
-from datetime import date
 import os
+from datetime import date
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ============================================================
 # TELEGRAM
 # ============================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is not set in environment variables")
-
-# ============================================================
-# BOT
-# ============================================================
+    raise RuntimeError("BOT_TOKEN is not set")
 
 BOT_NAME = "AnonyLink"
 
 # ============================================================
-# GLOBAL FREE WINDOW
+# DATABASE (ABSOLUTE AUTHORITY)
 # ============================================================
 
-# MUST be datetime.date objects
-GLOBAL_FREE_START = date(2026, 1, 1)
-GLOBAL_FREE_END = date(2026, 2, 25)
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is not set")
+
+# 🔒 HARD SAFETY: never touch anonylink accidentally
+if "anonylink" in DATABASE_URL:
+    raise RuntimeError(
+        "❌ REFUSING TO START: DATABASE_URL points to anonylink"
+    )
 
 # ============================================================
-# TRIALS
+# ENV
 # ============================================================
 
-FREE_TRIAL_COUNT = 5
-
-# ============================================================
-# VIP — TELEGRAM STARS
-# ============================================================
-
-VIP_PRODUCT_ID = "anonylink_vip_30d"
-VIP_PRICE_STARS = 50
-VIP_DURATION_DAYS = 30
+BOT_ENV = os.getenv("BOT_ENV", "prod")
+DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 # ============================================================
 # REDIS
@@ -49,26 +48,37 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 
 # ============================================================
-# POSTGRESQL
+# TRIAL SYSTEM
 # ============================================================
 
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
-POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
-POSTGRES_DB = os.getenv("POSTGRES_DB", "anonylink")
-POSTGRES_USER = os.getenv("POSTGRES_USER", "anonylink")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
+FREE_TRIAL_COUNT = int(os.getenv("FREE_TRIAL_COUNT", "5"))
 
-if not POSTGRES_PASSWORD:
-    raise RuntimeError("POSTGRES_PASSWORD is not set in environment variables")
+# ============================================================
+# GLOBAL FREE WINDOW
+# ============================================================
+
+GLOBAL_FREE_START = date(1970, 1, 1)
+GLOBAL_FREE_END = date(1970, 1, 1)
+
+# ============================================================
+# VIP (Telegram Stars)
+# ============================================================
+
+VIP_PRODUCT_ID = "anonylink_vip_30d"
+VIP_PRICE_STARS = 50
+VIP_DURATION_DAYS = 30
 
 # ============================================================
 # ADMIN
 # ============================================================
 
-# Telegram user IDs allowed to access admin commands
 ADMIN_IDS = {
-    659916146,   # <-- YOUR Telegram ID
+    659916146,
+    7132350913,  # your Telegram ID
 }
 
+# ============================================================
+# REFERRALS
+# ============================================================
 
 REFERRAL_BONUS_DAYS = int(os.getenv("REFERRAL_BONUS_DAYS", "3"))

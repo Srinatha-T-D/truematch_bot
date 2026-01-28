@@ -1,4 +1,5 @@
 # bot/handlers/profile.py
+# Profile registration callbacks (FINAL, CLEAN)
 
 import logging
 from telegram import (
@@ -9,16 +10,21 @@ from telegram import (
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest
 
-from bot.handlers.match import enqueue_for_match
+from bot.core.users import update_user_preferences
+from bot.handlers.match import match_command
 
 logger = logging.getLogger(__name__)
 
 
 async def profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if not query:
+        return
+
     await query.answer()
 
     user = query.from_user
+    user_id = str(user.id)
     data = query.data
 
     # ==========================
@@ -26,23 +32,21 @@ async def profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ==========================
     if data.startswith("gender:"):
         gender = data.split(":", 1)[1]
-        context.user_data["gender"] = gender
 
-        logger.info(f"User {user.id} selected gender: {gender}")
+        update_user_preferences(user_id, gender=gender)
+
+        logger.info("User %s selected gender: %s", user_id, gender)
 
         keyboard = [
             [
-                InlineKeyboardButton("♂️ Male", callback_data="looking:male"),
-                InlineKeyboardButton("♀️ Female", callback_data="looking:female"),
-            ],
-            [
-                InlineKeyboardButton("🌈 Any", callback_data="looking:any"),
+                InlineKeyboardButton("👨 Men", callback_data="looking:male"),
+                InlineKeyboardButton("👩 Women", callback_data="looking:female"),
             ],
         ]
 
         try:
             await query.edit_message_text(
-                text="🔍 *Who are you looking for?*",
+                text="🔍 *Who are you looking to chat with?*",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode="Markdown",
             )
@@ -56,25 +60,25 @@ async def profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ==========================
     if data.startswith("looking:"):
         looking_for = data.split(":", 1)[1]
-        context.user_data["looking_for"] = looking_for
+
+        update_user_preferences(user_id, looking_for=looking_for)
 
         logger.info(
-            f"User {user.id} profile complete | "
-            f"gender={context.user_data.get('gender')} | "
-            f"looking_for={looking_for}"
+            "User %s profile complete | gender + looking_for saved",
+            user_id,
         )
 
         try:
             await query.edit_message_text(
                 text=(
                     "✅ *You’re all set!*\n\n"
-                    "🔍 Use /find to start chatting\n"
-                    "🎁 Use /invite to invite friends & earn rewards\n"
-                    "📜 Use /rules to read guidelines"
+                    "🔍 Finding a match for you now…"
                 ),
                 parse_mode="Markdown",
             )
         except BadRequest:
             pass
 
-        # 🚀 NOW MATCH
+        # 🚀 Resume matching using the ONLY supported entry point
+        await match_command(update, context)
+        return

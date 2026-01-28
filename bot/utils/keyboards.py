@@ -7,7 +7,6 @@ def intent_keyboard() -> InlineKeyboardMarkup:
     """
     Keyboard for selecting intent (what user is looking for)
     """
-
     keyboard = [
         [
             InlineKeyboardButton(
@@ -26,7 +25,6 @@ def intent_keyboard() -> InlineKeyboardMarkup:
             ),
         ],
     ]
-
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -34,7 +32,6 @@ def vip_keyboard() -> InlineKeyboardMarkup:
     """
     Keyboard shown when VIP is required
     """
-
     keyboard = [
         [
             InlineKeyboardButton(
@@ -43,7 +40,26 @@ def vip_keyboard() -> InlineKeyboardMarkup:
             )
         ]
     ]
+    return InlineKeyboardMarkup(keyboard)
 
+
+def consent_keyboard() -> InlineKeyboardMarkup:
+    """
+    Keyboard shown when no exact match is available.
+    User explicitly chooses whether to relax preferences.
+    """
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text="✅ Yes",
+                callback_data="consent_yes"
+            ),
+            InlineKeyboardButton(
+                text="❌ No",
+                callback_data="consent_no"
+            ),
+        ]
+    ]
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -51,7 +67,6 @@ def disconnect_keyboard() -> InlineKeyboardMarkup:
     """
     Keyboard shown during active chat
     """
-
     keyboard = [
         [
             InlineKeyboardButton(
@@ -60,10 +75,19 @@ def disconnect_keyboard() -> InlineKeyboardMarkup:
             )
         ]
     ]
-
     return InlineKeyboardMarkup(keyboard)
 
-def report_keyboard():
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("🚩 Report", callback_data="chat:report")]]
-    )
+
+def report_keyboard() -> InlineKeyboardMarkup:
+    """
+    Keyboard shown after chat for reporting
+    """
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text="🚩 Report",
+                callback_data="chat:report"
+            )
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)

@@ -3,12 +3,16 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from bot.core.database import fetch_one, fetch_all
+from bot.core.db import get_db
 from bot.core.referral import REFERRAL_BONUS_DAYS
 from bot.utils.admin import is_admin
 
 
 async def refstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Safety: ignore non-message updates
+    if not update.message:
+        return
+
     user = update.effective_user
 
     # 🔒 Admin check
@@ -18,25 +22,36 @@ async def refstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Total invited users
-    total_row = await fetch_one(
-        "SELECT COUNT(*) AS cnt FROM users WHERE referred_by IS NOT NULL"
-    )
-    total_invites = total_row["cnt"] if total_row else 0
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            # -----------------------------
+            # Total invited users
+            # -----------------------------
+            cur.execute(
+                "SELECT COUNT(*) FROM users WHERE referred_by IS NOT NULL"
+            )
+            total_invites = cur.fetchone()[0] or 0
 
-    total_vip_days = total_invites * REFERRAL_BONUS_DAYS
+            total_vip_days = total_invites * REFERRAL_BONUS_DAYS
 
-    # Top inviters
-    top_rows = await fetch_all(
-        """
-        SELECT referred_by AS user_id, COUNT(*) AS cnt
-        FROM users
-        WHERE referred_by IS NOT NULL
-        GROUP BY referred_by
-        ORDER BY cnt DESC
-        LIMIT 5
-        """
-    )
+            # -----------------------------
+            # Top inviters
+            # -----------------------------
+            cur.execute(
+                """
+                SELECT referred_by AS user_id, COUNT(*) AS cnt
+                FROM users
+                WHERE referred_by IS NOT NULL
+                GROUP BY referred_by
+                ORDER BY cnt DESC
+                LIMIT 5
+                """
+            )
+            top_rows = cur.fetchall() or []
+
+    finally:
+        conn.close()
 
     if top_rows:
         top_lines = []

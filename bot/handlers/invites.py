@@ -4,29 +4,47 @@ from datetime import timezone
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from bot.core.database import fetch_one
+from bot.core.users import get_or_create_user
+from bot.core.db import get_db
 from bot.core.referral import REFERRAL_BONUS_DAYS
 
 
 async def invites_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Safety: ignore non-message updates
+    if not update.message:
+        return
+
     user = update.effective_user
+    user_id = str(user.id)
 
-    # Count how many users this person referred
-    row = await fetch_one(
-        "SELECT COUNT(*) AS cnt FROM users WHERE referred_by = $1",
-        user.id,
-    )
+    # Ensure user exists
+    get_or_create_user(user.id)
 
-    invite_count = row["cnt"] if row else 0
-    vip_days_earned = invite_count * REFERRAL_BONUS_DAYS
+    # --------------------------
+    # DB read (report-style, no mutation)
+    # --------------------------
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            # Count invited users
+            cur.execute(
+                "SELECT COUNT(*) FROM users WHERE referred_by = %s",
+                (user_id,),
+            )
+            invite_count = cur.fetchone()[0] or 0
 
-    # Fetch current VIP status
-    vip_row = await fetch_one(
-        "SELECT vip_until FROM users WHERE user_id = $1",
-        user.id,
-    )
+            vip_days_earned = invite_count * REFERRAL_BONUS_DAYS
 
-    vip_until = vip_row["vip_until"] if vip_row else None
+            # Fetch VIP status
+            cur.execute(
+                "SELECT vip_until FROM users WHERE user_id = %s",
+                (user_id,),
+            )
+            row = cur.fetchone()
+            vip_until = row["vip_until"] if row else None
+
+    finally:
+        conn.close()
 
     if vip_until:
         vip_until_str = vip_until.astimezone(timezone.utc).strftime("%d %b %Y")

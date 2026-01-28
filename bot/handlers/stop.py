@@ -10,35 +10,49 @@ from bot.core.redis import get_redis
 logger = logging.getLogger(__name__)
 
 
+# =========================
+# QUEUE CLEANUP
+# =========================
+
 async def _remove_from_all_queues(user_id: int):
+    """
+    Remove user from all Redis matchmaking queues (best-effort).
+    """
     redis = await get_redis()
     keys = await redis.keys("queue:*")
 
     for key in keys:
         items = await redis.lrange(key, 0, -1)
         for item in items:
-            q_user_id, _ = map(int, item.split(":"))
-            if q_user_id == user_id:
-                await redis.lrem(key, 1, item)
-                logger.info(f"User {user_id} removed from queue {key}")
+            try:
+                q_user_id, _ = item.split(":")
+                if int(q_user_id) == int(user_id):
+                    await redis.lrem(key, 1, item)
+            except Exception:
+                continue
 
+
+# =========================
+# /stop COMMAND
+# =========================
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
+    user_id = user.id
 
-    partner = get_partner(user.id)
+    partner = get_partner(user_id)
 
-    # ==========================
-    # DISCONNECT BOTH USERS
-    # ==========================
+    # --------------------------
+    # 🔴 END ACTIVE CHAT
+    # --------------------------
     if partner:
-        partner_id, partner_chat_id = partner
+        partner_id, partner_chat_id, _ = partner
 
-        # Clear active chat mapping
-        disconnect_users(user.id)
+        # End chat session (safe if already ended)
+        disconnect_users(user_id)
 
-        # Notify current user (POLISHED UX)
+        # Notify current user
         await context.bot.send_message(
             chat_id=chat_id,
             text=(
@@ -50,29 +64,36 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ),
         )
 
-        # Notify partner (neutral & safe)
-        await context.bot.send_message(
-            chat_id=partner_chat_id,
-            text="❌ Chat ended.",
-        )
+        # Notify partner (best-effort)
+        try:
+            await context.bot.send_message(
+                chat_id=partner_chat_id,
+                text="❌ Chat ended.",
+            )
+        except Exception:
+            pass
 
-        # Remove both users from queues
-        await _remove_from_all_queues(user.id)
+        # Cleanup queues for both users
+        await _remove_from_all_queues(user_id)
         await _remove_from_all_queues(partner_id)
 
         logger.info(
-            f"Chat stopped | user={user.id} partner={partner_id}"
+            "Chat stopped | user=%s partner=%s",
+            user_id,
+            partner_id,
         )
 
-    else:
-        # Not in chat — still cleanup
-        await _remove_from_all_queues(user.id)
+        return
 
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=(
-                "🛑 You have exited matchmaking.\n\n"
-                "Use /find to start a new chat anytime."
-            ),
-        )
+    # --------------------------
+    # 🧹 NOT IN CHAT → CLEAN EXIT
+    # --------------------------
+    await _remove_from_all_queues(user_id)
 
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "🛑 You have exited matchmaking.\n\n"
+            "Use /find to start a new chat anytime."
+        ),
+    )

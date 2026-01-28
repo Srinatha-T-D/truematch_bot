@@ -1,5 +1,8 @@
+# bot/handlers/rules.py
+
 from telegram import Update
 from telegram.ext import ContextTypes
+
 
 RULES_TEXT = (
     "📜 *TrueMatch Rules & Privacy*\n\n"
@@ -15,8 +18,14 @@ RULES_TEXT = (
     "Violations may lead to permanent bans."
 )
 
+
 async def rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Safety: ignore non-message updates
+    if not update.message:
+        return
+
     await update.message.reply_text(
         RULES_TEXT,
         parse_mode="Markdown",
+        protect_content=True,
     )

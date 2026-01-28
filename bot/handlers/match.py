@@ -1,45 +1,62 @@
 # bot/handlers/match.py
+# Handles /find and /next — orchestration only (logic-free)
 
 import logging
-from datetime import date
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from bot.core.matchmaking import add_to_queue, get_partner, disconnect_users
+from bot.core.matchmaking import try_match, get_partner, disconnect_users
 from bot.core.trials import can_user_chat
 from bot.core.cooldown import is_on_cooldown, set_cooldown
-from bot.config.settings import GLOBAL_FREE_START, GLOBAL_FREE_END
-from bot.utils.keyboards import vip_keyboard
+from bot.utils.keyboards import vip_keyboard, consent_keyboard
+from bot.utils.states import CONSENT_WAIT
 
 logger = logging.getLogger(__name__)
 
 
+# =========================
+# /find
+# =========================
 async def match_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await enqueue_for_match(update, context)
+    await _handle_find(update, context)
 
 
+# =========================
+# /next
+# =========================
 async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
 
     partner = get_partner(user.id)
     if partner:
+        partner_id, partner_chat_id, _ = partner
         disconnect_users(user.id)
+
         await context.bot.send_message(
             chat_id=chat_id,
-            text="🔁 Finding a new partner...",
+            text="🔁 Skipping… finding a new partner.",
         )
 
-    await enqueue_for_match(update, context)
+        try:
+            await context.bot.send_message(
+                chat_id=partner_chat_id,
+                text="❌ Your partner has left the chat.",
+            )
+        except Exception:
+            pass
+
+    await _handle_find(update, context)
 
 
-async def enqueue_for_match(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =========================
+# CORE /find FLOW
+# =========================
+async def _handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
 
-    # ==========================
-    # ⏱ COOLDOWN CHECK
-    # ==========================
+    # ⏱ Cooldown
     remaining = await is_on_cooldown(user.id)
     if remaining > 0:
         await context.bot.send_message(
@@ -48,32 +65,17 @@ async def enqueue_for_match(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    intent = context.user_data.get("intent")
-    if not intent:
+    # 🔐 Trial / VIP access
+    if not can_user_chat(user.id):
         await context.bot.send_message(
             chat_id=chat_id,
-            text="❗ Please choose what you are looking for using /start",
+            text="🚫 *Access limit reached*\n\nUpgrade to VIP to continue chatting.",
+            reply_markup=vip_keyboard(),
+            parse_mode="Markdown",
         )
         return
 
-    today = date.today()
-    is_global_free = GLOBAL_FREE_START <= today <= GLOBAL_FREE_END
-
-    # 🔥 GLOBAL FREE = ALWAYS ALLOW
-    if not is_global_free:
-        allowed = await can_user_chat(user.id)
-        if not allowed:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="🚫 *Access limit reached*\n\nUpgrade to VIP to continue chatting.",
-                reply_markup=vip_keyboard(),
-                parse_mode="Markdown",
-            )
-            return
-
-    # ==========================
-    # ✅ UX POLISH (NEW)
-    # ==========================
+    # UX feedback
     await context.bot.send_message(
         chat_id=chat_id,
         text=(
@@ -84,16 +86,26 @@ async def enqueue_for_match(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-    # ✅ Set cooldown only when enqueue is valid
+    # set cooldown
     await set_cooldown(user.id)
 
-    await add_to_queue(
-        user_id=user.id,
+    # 🚀 TRY MATCH (VIP or FREE decided internally)
+    matched = await try_match(user.id, chat_id)
+
+    if matched:
+        logger.info("User %s matched immediately", user.id)
+        return
+
+    # ❗ CONSENT REQUIRED
+    context.user_data["state"] = CONSENT_WAIT
+
+    await context.bot.send_message(
         chat_id=chat_id,
-        intent=intent,
-        context=context,
+        text=(
+            "❌ No users available for your preference right now.\n\n"
+            "Would you like to connect with others?"
+        ),
+        reply_markup=consent_keyboard(),
     )
 
-    logger.info(
-        f"User {user.id} queued (intent={intent}, global_free={is_global_free})"
-    )
+    logger.info("User %s awaiting consent", user.id)

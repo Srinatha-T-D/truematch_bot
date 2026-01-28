@@ -1,7 +1,7 @@
 # bot/app.py
+# FINAL application wiring — aligned with frozen core logic
 
 import logging
-import asyncio
 
 from telegram.ext import (
     Application,
@@ -13,43 +13,41 @@ from telegram.ext import (
 )
 
 from bot.config.settings import BOT_TOKEN
-from bot.core.timeout import timeout_watcher
 
-# ---------------- HANDLERS ----------------
-
-# User handlers
-from bot.handlers.start import start_handler
-from bot.handlers.intent import intent_callback
-from bot.handlers.profile import profile_callback
-from bot.handlers.match import match_command, next_command
+# ---------------- CORE ----------------
+from bot.handlers.start import start_handler, registration_callback
+from bot.handlers.match import match_command
+from bot.handlers.next import next_command
 from bot.handlers.chat import chat_message
 from bot.handlers.disconnect import disconnect_callback
-from bot.handlers.vipstatus import vipstatus_command
-from bot.handlers.next import next_command
-from bot.handlers.rules import rules_command
-from bot.handlers.invite import invite_command
-from bot.handlers.refstats import refstats_command
-from bot.handlers.invites import invites_command
-from bot.handlers.stop import stop_command
-from bot.handlers.help import help_handler
-from bot.handlers.admin_revenue import revenue_handler
-from bot.handlers.admin_systemhealth import systemhealth_handler
-from bot.handlers.admin_help import adminhelp_handler
-from bot.handlers.admin_readchat import readchat_handler
-from bot.handlers.error import error_handler
-from bot.handlers.admin_ban import ban_handler, unban_handler
-from bot.handlers.admin_alerts import alerts_handler
-from bot.handlers.admin_history import chat_history_command, view_chat_command
-from bot.handlers.admin_audit import (
-    active_chats_command,
-    force_stop_command,
-)
-from bot.handlers.report import (
-    report_entry_callback,
-    report_reason_callback,
+from bot.handlers.consent import consent_callback
+from bot.handlers.reset_profile import reset_profile_command
+from bot.handlers.vip_callbacks import vip_callback_router
+from bot.handlers.vip_features.preferences_ui import vip_preferences_callback
+from bot.handlers.verify import verify_command
+from bot.handlers.verify_steps import (
+    verify_text_handler,
+    verify_gender_callback,
 )
 
-# Payments
+# ---------------- USER / PROFILE ----------------
+from bot.handlers.profile import profile_callback
+
+# ---------------- VIP SERVICES ----------------
+from bot.handlers.vipservices import vipservices
+from bot.handlers.vip_filters import (
+    vip_filters_menu,
+    vip_age_menu,
+    vip_age_callback,
+    vip_state_menu,
+    vip_state_callback,
+    vip_language_menu,
+    vip_language_callback,
+    vip_verified_only,
+    vip_reset_filters,
+)
+
+# ---------------- PAYMENTS ----------------
 from bot.handlers.payments import (
     send_vip_menu,
     vip_tier_callback,
@@ -58,103 +56,123 @@ from bot.handlers.payments import (
     successful_payment_handler,
 )
 
-# Admin
-from bot.handlers.admin import (
-    stats_command,
-    users_command,
-    grantvip_command,
+# ---------------- ADMIN ----------------
+from bot.handlers.admin import grantvip_command
+from bot.handlers.admin_verification import (
+    verify_pending,
+    verify_approve,
+    verify_reject,
+    verify_stats,   # ✅ FIXED IMPORT
 )
+
+# ---------------- ERROR ----------------
+from bot.handlers.error import error_handler
 
 logger = logging.getLogger(__name__)
 
 
-# 🔹 This runs AFTER event loop starts
-async def post_init(application: Application):
-    from bot.core.recovery import crash_recovery
-    from bot.core.timeout import timeout_watcher
-    import asyncio
-    from bot.core.chat_logger import cleanup_old_chats
-    await cleanup_old_chats()
-
-    # 🧯 Crash recovery first
-    await crash_recovery()
-
-    # ⏳ Start auto-timeout watcher
-    asyncio.create_task(timeout_watcher(application.bot))
-
-    logger.info("🧯 Crash recovery done, ⏳ auto-timeout watcher started")
-
-
+# ======================================================
+# APPLICATION SETUP (CLEAN & FINAL)
+# ======================================================
 def create_application() -> Application:
-    application = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .post_init(post_init)  # ✅ correct place
-        .build()
-    )
+    app = Application.builder().token(BOT_TOKEN).build()
 
     # ---------------- COMMANDS ----------------
-    application.add_handler(CommandHandler("start", start_handler))
-    application.add_handler(CommandHandler("find", match_command))
-    application.add_handler(CommandHandler("next", next_command))
-    application.add_handler(CommandHandler("vip", send_vip_menu))
-    application.add_handler(CommandHandler("vipstatus", vipstatus_command))
-    application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(CommandHandler("users", users_command))
-    application.add_handler(CommandHandler("grantvip", grantvip_command))
-    application.add_handler(CommandHandler("stop", stop_command))
-    application.add_handler(CommandHandler("activechats", active_chats_command))
-    application.add_handler(CommandHandler("force_stop", force_stop_command))
-    application.add_handler(CommandHandler("chat_history", chat_history_command))
-    application.add_handler(CommandHandler("view_chat", view_chat_command))
-    application.add_handler(CommandHandler("invite", invite_command))
-    application.add_handler(CommandHandler("rules", rules_command))
-    application.add_handler(CommandHandler("next", next_command))
-    application.add_handler(CommandHandler("invites", invites_command))
-    application.add_handler(CommandHandler("refstats", refstats_command))
-    application.add_error_handler(error_handler)
-    application.add_handler(readchat_handler)
-    application.add_handler(revenue_handler)
-    application.add_handler(systemhealth_handler)
-    application.add_handler(help_handler)
-    application.add_handler(adminhelp_handler)
-    application.add_handler(alerts_handler)
-    application.add_handler(ban_handler)
-    application.add_handler(unban_handler)
+    app.add_handler(CommandHandler("start", start_handler))
+    app.add_handler(CommandHandler("find", match_command))
+    app.add_handler(CommandHandler("next", next_command))
+    app.add_handler(CommandHandler("vip", send_vip_menu))
+    app.add_handler(CommandHandler("vipservices", vipservices))
+    app.add_handler(CommandHandler("grantvip", grantvip_command))
+    app.add_handler(CommandHandler("reset_profile", reset_profile_command))
+    app.add_handler(CommandHandler("verify", verify_command))
 
-    # ---------------- CALLBACKS ----------------
-    application.add_handler(
-        CallbackQueryHandler(intent_callback, pattern="^intent:")
+    # 🔐 VERIFICATION (ADMIN)
+    app.add_handler(CommandHandler("verify_pending", verify_pending))
+    app.add_handler(CommandHandler("verify_approve", verify_approve))
+    app.add_handler(CommandHandler("verify_reject", verify_reject))
+    app.add_handler(CommandHandler("verify_stats", verify_stats))  # ✅ now works
+
+    # ---------------- REGISTRATION ----------------
+    app.add_handler(
+        CallbackQueryHandler(registration_callback, pattern="^reg_")
     )
-    application.add_handler(
+
+    # ---------------- VERIFICATION FLOW ----------------
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, verify_text_handler)
+    )
+    app.add_handler(
+        CallbackQueryHandler(verify_gender_callback, pattern="^verify_gender:")
+    )
+
+    # ---------------- START MATCHING (BUTTON) ----------------
+    app.add_handler(
+        CallbackQueryHandler(match_command, pattern="^start_matching$")
+    )
+
+    # ---------------- CORE CALLBACKS ----------------
+    app.add_handler(
+        CallbackQueryHandler(consent_callback, pattern="^consent_")
+    )
+    app.add_handler(
         CallbackQueryHandler(profile_callback, pattern="^(gender:|looking:)")
     )
-    application.add_handler(
-        CallbackQueryHandler(vip_tier_callback, pattern="^vip:tier:")
-    )
-    application.add_handler(
-        CallbackQueryHandler(send_vip_invoice, pattern="^vip:buy:")
-    )
-    application.add_handler(
+    app.add_handler(
         CallbackQueryHandler(disconnect_callback, pattern="^chat:disconnect$")
     )
-    application.add_handler(
-        CallbackQueryHandler(report_entry_callback, pattern="^chat:report$")
+
+    # ---------------- VIP CALLBACK ROUTER ----------------
+    app.add_handler(
+        CallbackQueryHandler(vip_callback_router, pattern="^vip_")
     )
-    application.add_handler(
-        CallbackQueryHandler(report_reason_callback, pattern="^report:")
+    app.add_handler(
+        CallbackQueryHandler(vip_preferences_callback, pattern="^vip_pref:")
+    )
+
+    # ---------------- VIP FILTER FLOW ----------------
+    app.add_handler(CallbackQueryHandler(vip_filters_menu, pattern="^vip_filters$"))
+    app.add_handler(CallbackQueryHandler(vip_age_menu, pattern="^vip_age_menu$"))
+    app.add_handler(CallbackQueryHandler(vip_age_callback, pattern="^vip_age:"))
+    app.add_handler(CallbackQueryHandler(vip_state_menu, pattern="^vip_state_menu$"))
+    app.add_handler(CallbackQueryHandler(vip_state_callback, pattern="^vip_state:"))
+    app.add_handler(
+        CallbackQueryHandler(vip_language_menu, pattern="^vip_language_menu$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(vip_language_callback, pattern="^vip_lang:")
+    )
+    app.add_handler(
+        CallbackQueryHandler(vip_verified_only, pattern="^vip_verified_only$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(vip_reset_filters, pattern="^vip_reset_filters$")
     )
 
     # ---------------- PAYMENTS ----------------
-    application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
-    application.add_handler(
+    app.add_handler(
+        CallbackQueryHandler(vip_tier_callback, pattern="^vip:tier:")
+    )
+    app.add_handler(
+        CallbackQueryHandler(send_vip_invoice, pattern="^vip:buy:")
+    )
+    app.add_handler(
+        CallbackQueryHandler(send_vip_menu, pattern="^vip:buy$")
+    )
+    app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+    app.add_handler(
         MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler)
     )
 
     # ---------------- CHAT ----------------
-    application.add_handler(
+    app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, chat_message)
     )
 
-    logger.info("✅ Telegram application created and handlers registered")
-    return application
+    # ---------------- ERROR ----------------
+    app.add_error_handler(error_handler)
+
+    logger.info("✅ TrueMatch application started (clean core)")
+
+    return app
+

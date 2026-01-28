@@ -7,7 +7,7 @@ from bot.config.settings import ADMIN_IDS
 
 
 ADMIN_HELP_TEXT = (
-    "🛡️ *Anonylink — Admin Commands*\n\n"
+    "🛡️ *Truematch — Admin Commands*\n\n"
 
     "🔍 */readchat <session_uuid>*\n"
     "Export full anonymous chat as read-only CSV\n\n"
@@ -53,6 +53,10 @@ ADMIN_HELP_TEXT = (
 
 
 async def adminhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Safety: ignore non-message updates
+    if not update.message:
+        return
+
     if update.effective_user.id not in ADMIN_IDS:
         return
 
@@ -63,4 +67,5 @@ async def adminhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# Export handler (consistent with other admin modules)
 adminhelp_handler = CommandHandler("adminhelp", adminhelp_command)

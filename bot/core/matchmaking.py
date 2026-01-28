@@ -1,113 +1,252 @@
 # bot/core/matchmaking.py
+# Frozen matchmaking engine — DO NOT MIX LOGIC HERE
 
 import logging
-from typing import Dict, Tuple
+import asyncio
+from typing import Dict, Tuple, Optional
 
 from bot.core.redis import get_redis
 from bot.utils.keyboards import disconnect_keyboard
 from bot.core.chat_logger import create_chat_session, end_chat_session
+from bot.core.db import get_db
 
 logger = logging.getLogger(__name__)
 
 # user_id -> (partner_user_id, partner_chat_id, session_id)
-ACTIVE_CHATS: Dict[int, Tuple[int, int, str]] = {}
+ACTIVE_CHATS: Dict[str, Tuple[str, int, str]] = {}
+
+QUEUE_KEY = "matchmaking:queue"
 
 
-def _queue_key(intent: str) -> str:
-    return f"queue:{intent}"
+# =========================
+# INTERNAL HELPERS
+# =========================
+
+def _uid(user_id) -> str:
+    """Normalize user_id to TEXT (DB-safe)"""
+    return str(user_id)
 
 
-async def add_to_queue(user_id: int, chat_id: int, intent: str, context):
+# =========================
+# QUEUE HELPERS
+# =========================
+
+async def enqueue(user_id: int, chat_id: int):
     redis = await get_redis()
-    queue_key = _queue_key(intent)
+    await redis.sadd(QUEUE_KEY, f"{_uid(user_id)}:{chat_id}")
 
-    # 🚫 Already in an active chat
-    if user_id in ACTIVE_CHATS:
-        return
 
-    # 🚫 Prevent duplicate queue entry
-    queue_items = await redis.lrange(queue_key, 0, -1)
-    for item in queue_items:
-        q_user_id, _ = map(int, item.split(":"))
-        if q_user_id == user_id:
-            logger.info(f"User {user_id} already in queue, skipping")
+async def dequeue(user_id: int):
+    redis = await get_redis()
+    uid = _uid(user_id)
+
+    members = await redis.smembers(QUEUE_KEY)
+    for m in members:
+        mid = m.decode() if isinstance(m, bytes) else m
+        if mid.split(":")[0] == uid:
+            await redis.srem(QUEUE_KEY, m)
             return
 
-    partner = await redis.lpop(queue_key)
 
-    if partner:
-        partner_id, partner_chat_id = map(int, partner.split(":"))
+async def _queue_members(exclude_user: int):
+    redis = await get_redis()
+    exclude_uid = _uid(exclude_user)
 
-        # 🚫 Prevent self-match
-        if partner_id == user_id:
-            logger.warning(f"Prevented self-match for user {user_id}")
-            await redis.rpush(queue_key, partner)
-            return
+    members = await redis.smembers(QUEUE_KEY)
+    result = []
 
-        await _match_users(
-            user_id,
-            chat_id,
-            partner_id,
-            partner_chat_id,
-            context,
-        )
-        return
+    for m in members:
+        mid = m.decode() if isinstance(m, bytes) else m
+        uid, chat = mid.split(":")
+        if uid != exclude_uid:
+            result.append((uid, int(chat)))
 
-    await redis.rpush(queue_key, f"{user_id}:{chat_id}")
-    logger.info(f"User {user_id} queued under intent '{intent}'")
+    return result
 
 
-async def _match_users(
-    user_id: int,
+# =========================
+# MATCH FINDERS
+# =========================
+
+def _fetch_user(user_id: int) -> Optional[dict]:
+    user_id = _uid(user_id)
+
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM users WHERE user_id=%s",
+                (user_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+
+            cols = [d[0] for d in cur.description]
+            return dict(zip(cols, row))
+    finally:
+        conn.close()
+
+
+async def find_strict_match(user: dict) -> Optional[Tuple[str, int]]:
+    """
+    Gender <-> looking_for ONLY
+    """
+    for partner_id, partner_chat in await _queue_members(user["user_id"]):
+        partner = _fetch_user(partner_id)
+        if not partner:
+            continue
+
+        if (
+            partner["gender"] == user["looking_for"]
+            and partner["looking_for"] == user["gender"]
+        ):
+            return partner_id, partner_chat
+
+    return None
+
+
+async def find_vip_match(user: dict) -> Optional[Tuple[str, int]]:
+    """
+    VIP match with SOFT filters (gender NEVER relaxed)
+    """
+    candidates = []
+
+    for partner_id, partner_chat in await _queue_members(user["user_id"]):
+        partner = _fetch_user(partner_id)
+        if not partner:
+            continue
+
+        # HARD RULE
+        if partner["gender"] != user["looking_for"]:
+            continue
+
+        candidates.append((partner, partner_chat))
+
+    # Exact VIP preferences
+    for partner, chat_id in candidates:
+        if user.get("verified_only") and not partner.get("is_verified"):
+            continue
+
+        if user.get("age_min") and partner.get("age") is not None:
+            if partner["age"] < user["age_min"]:
+                continue
+
+        if user.get("age_max") and partner.get("age") is not None:
+            if partner["age"] > user["age_max"]:
+                continue
+
+        if user.get("state") and partner.get("state"):
+            if user["state"] != partner["state"]:
+                continue
+
+        if user.get("language") and partner.get("language"):
+            if user["language"] != partner["language"]:
+                continue
+
+        return partner["user_id"], chat_id
+
+    # Fallback: gender only
+    if candidates:
+        partner, chat_id = candidates[0]
+        return partner["user_id"], chat_id
+
+    return None
+
+
+# =========================
+# PUBLIC ENTRY POINT
+# =========================
+
+async def try_match(user_id: int, chat_id: int) -> bool:
+    """
+    Returns True if matched, False if consent required
+    """
+    uid = _uid(user_id)
+
+    if uid in ACTIVE_CHATS:
+        return True
+
+    user = _fetch_user(uid)
+    if not user:
+        return False
+
+    await enqueue(uid, chat_id)
+
+    # 🔐 VIP USERS
+    if user.get("is_vip"):
+        match = await find_vip_match(user)
+        if match:
+            partner_id, partner_chat = match
+            await _connect(uid, chat_id, partner_id, partner_chat)
+            return True
+        return False
+
+    # 🆓 FREE USERS
+    match = await find_strict_match(user)
+    if match:
+        partner_id, partner_chat = match
+        await _connect(uid, chat_id, partner_id, partner_chat)
+        return True
+
+    return False
+
+
+# =========================
+# MATCH EXECUTION
+# =========================
+
+async def _connect(
+    user_id: str,
     chat_id: int,
-    partner_id: int,
+    partner_id: str,
     partner_chat_id: int,
-    context,
 ):
-    # 🔐 Create chat session for admin audit (14-day retention)
+    await dequeue(user_id)
+    await dequeue(partner_id)
+
     session_id = await create_chat_session(user_id, partner_id)
 
     ACTIVE_CHATS[user_id] = (partner_id, partner_chat_id, session_id)
     ACTIVE_CHATS[partner_id] = (user_id, chat_id, session_id)
 
-    logger.info(f"Matched users {user_id} <-> {partner_id} | session={session_id}")
-
-    match_text = (
+    text = (
         "🎉 *You are now connected anonymously!*\n\n"
         "💬 Say hi and start chatting\n"
         "❌ Tap Disconnect to end the chat\n"
         "🚩 You can report after the chat ends"
     )
 
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=match_text,
-        reply_markup=disconnect_keyboard(),
-        parse_mode="Markdown",
+    from bot.app import bot
+    await asyncio.gather(
+        *[
+            bot.send_message(
+                chat_id=cid,
+                text=text,
+                reply_markup=disconnect_keyboard(),
+                parse_mode="Markdown",
+            )
+            for cid in (chat_id, partner_chat_id)
+        ]
     )
 
-    await context.bot.send_message(
-        chat_id=partner_chat_id,
-        text=match_text,
-        reply_markup=disconnect_keyboard(),
-        parse_mode="Markdown",
-    )
 
+# =========================
+# ACTIVE CHAT HELPERS
+# =========================
 
 def get_partner(user_id: int):
-    return ACTIVE_CHATS.get(user_id)
+    return ACTIVE_CHATS.get(_uid(user_id))
 
 
 def disconnect_users(user_id: int):
-    chat = ACTIVE_CHATS.pop(user_id, None)
+    uid = _uid(user_id)
+
+    chat = ACTIVE_CHATS.pop(uid, None)
     if not chat:
         return
 
     partner_id, _, session_id = chat
     ACTIVE_CHATS.pop(partner_id, None)
 
-    # 🔐 Close chat session safely (async, non-blocking)
-    import asyncio
     asyncio.create_task(end_chat_session(session_id))
-
-    logger.info(f"Chat ended | users={user_id},{partner_id} | session={session_id}")

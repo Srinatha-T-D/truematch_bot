@@ -11,7 +11,7 @@ from telegram import (
 )
 from telegram.ext import ContextTypes
 
-from bot.core.database import fetch_one, execute
+from bot.core.db import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -106,26 +106,29 @@ async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     plan_key = query.invoice_payload
     plan = VIP_PLANS.get(plan_key)
 
-    # Always accept valid plans
     if plan:
         await query.answer(ok=True)
         return
 
     # ❌ Invalid / failed payment
-    user_id = query.from_user.id
+    user_id = str(query.from_user.id)
     amount = plan["stars"] if plan else 0
 
-    await execute(
-        """
-        INSERT INTO payments (user_id, amount, provider, status)
-        VALUES ($1, $2, 'telegram_stars', 'FAILED')
-        """,
-        user_id,
-        amount,
-    )
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO payments (user_id, amount, provider, status)
+                VALUES (%s, %s, 'telegram_stars', 'FAILED')
+                """,
+                (user_id, amount),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
     logger.warning(f"PAYMENT FAILED | user={user_id} | payload={plan_key}")
-
     await query.answer(ok=False, error_message="Payment failed. Please try again.")
 
 # ======================================================
@@ -139,36 +142,41 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
     if not plan:
         return
 
-    user_id = update.effective_user.id
+    user_id = str(update.effective_user.id)
     now = datetime.utcnow()
 
-    row = await fetch_one(
-        "SELECT vip_until FROM users WHERE user_id = $1",
-        user_id,
-    )
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT vip_until FROM users WHERE user_id = %s",
+                (user_id,),
+            )
+            row = cur.fetchone()
 
-    current_vip_until = row["vip_until"] if row and row["vip_until"] else None
+            current_vip_until = row["vip_until"] if row and row["vip_until"] else None
 
-    if current_vip_until and current_vip_until > now:
-        new_vip_until = current_vip_until + timedelta(days=plan["days"])
-    else:
-        new_vip_until = now + timedelta(days=plan["days"])
+            if current_vip_until and current_vip_until > now:
+                new_vip_until = current_vip_until + timedelta(days=plan["days"])
+            else:
+                new_vip_until = now + timedelta(days=plan["days"])
 
-    await execute(
-        "UPDATE users SET vip_until = $1 WHERE user_id = $2",
-        new_vip_until,
-        user_id,
-    )
+            cur.execute(
+                "UPDATE users SET vip_until = %s WHERE user_id = %s",
+                (new_vip_until, user_id),
+            )
 
-    # ✅ SUCCESS PAYMENT LOG
-    await execute(
-        """
-        INSERT INTO payments (user_id, amount, provider, status)
-        VALUES ($1, $2, 'telegram_stars', 'SUCCESS')
-        """,
-        user_id,
-        plan["stars"],
-    )
+            cur.execute(
+                """
+                INSERT INTO payments (user_id, amount, provider, status)
+                VALUES (%s, %s, 'telegram_stars', 'SUCCESS')
+                """,
+                (user_id, plan["stars"]),
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
 
     logger.info(
         f"PAYMENT SUCCESS | user={user_id} | tier={plan['tier']} | until={new_vip_until}"

@@ -1,6 +1,6 @@
 # bot/handlers/admin_readchat.py
+# Admin-only chat session export (METADATA ONLY)
 
-import csv
 import io
 import asyncio
 from datetime import datetime
@@ -8,19 +8,17 @@ from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
 
 from bot.config.settings import ADMIN_IDS
-from bot.core.database import fetch_all
+from bot.core.db import get_db
 from bot.core.audit import log_admin_action
 
 AUTO_DELETE_SECONDS = 900  # 15 minutes
 
 
-def parse_datetime(value: str) -> datetime:
-    if "T" in value:
-        return datetime.strptime(value, "%Y-%m-%dT%H:%M")
-    return datetime.strptime(value, "%Y-%m-%d")
-
-
 async def readchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Safety
+    if not update.message:
+        return
+
     admin_id = update.effective_user.id
 
     # ── SECURITY ─────────────────────────────
@@ -33,115 +31,90 @@ async def readchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
         await update.message.reply_text(
-            "Usage:\n"
-            "/readchat <session_id>\n"
-            "/readchat <session_id> user=<id>\n"
-            "/readchat <session_id> from=YYYY-MM-DD to=YYYY-MM-DD"
+            "Usage:\n/readchat <session_id>\n\n"
+            "Note: Message contents are not stored.\n"
+            "This command exports session metadata only."
         )
         return
 
     session_id = context.args[0]
-    start_time = None
-    end_time = None
-    filter_user = None
 
-    for arg in context.args[1:]:
-        if arg.startswith("from="):
-            start_time = parse_datetime(arg.replace("from=", ""))
-        elif arg.startswith("to="):
-            end_time = parse_datetime(arg.replace("to=", ""))
-        elif arg.startswith("user="):
-            filter_user = int(arg.replace("user=", ""))
+    # ── FETCH SESSION ────────────────────────
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_a, user_b, started_at, ended_at
+                FROM chat_sessions
+                WHERE id = %s
+                """,
+                (session_id,),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
 
-    # ── QUERY ────────────────────────────────
-    query = """
-        SELECT sent_at, sender_id, message_type, message, file_id
-        FROM chat_messages
-        WHERE session_id = $1
-    """
-    params = [session_id]
-    idx = 2
-
-    if filter_user:
-        query += f" AND sender_id = ${idx}"
-        params.append(filter_user)
-        idx += 1
-
-    if start_time:
-        query += f" AND sent_at >= ${idx}"
-        params.append(start_time)
-        idx += 1
-
-    if end_time:
-        query += f" AND sent_at <= ${idx}"
-        params.append(end_time)
-        idx += 1
-
-    query += " ORDER BY sent_at ASC"
-
-    rows = await fetch_all(query, *params)
-
-    if not rows:
-        await update.message.reply_text("⚠️ No messages found.")
+    if not row:
+        await update.message.reply_text("❌ Session not found.")
         return
 
-    # ── CREATE CSV ───────────────────────────
+    user_a, user_b, started_at, ended_at = row
+
+    duration = (
+        int((ended_at - started_at).total_seconds())
+        if ended_at
+        else "ACTIVE"
+    )
+
+    # ── CREATE EXPORT ────────────────────────
     output = io.StringIO()
-    writer = csv.writer(output)
-
-    writer.writerow([
-        "sent_at",
-        "sender_id",
-        "message_type",
-        "message",
-        "file_id"
-    ])
-
-    for r in rows:
-        writer.writerow([
-            r["sent_at"].strftime("%Y-%m-%d %H:%M:%S"),
-            r["sender_id"],
-            r["message_type"],
-            r["message"] or "",
-            r["file_id"] or "",
-        ])
-
+    output.write("session_id,user_a,user_b,started_at,ended_at,duration\n")
+    output.write(
+        f"{session_id},{user_a},{user_b},"
+        f"{started_at},{ended_at or 'ACTIVE'},{duration}\n"
+    )
     output.seek(0)
-
-    filename = f"readchat_{session_id}.csv"
 
     sent_doc = await update.message.reply_document(
         document=output.getvalue().encode(),
-        filename=filename,
+        filename=f"readchat_{session_id}.csv",
         caption=(
-            f"📂 READ-ONLY CHAT EXPORT\n"
-            f"Session: {session_id}\n"
-            f"Messages: {len(rows)}\n"
-            f"User: {filter_user or 'ALL'}\n"
-            f"Auto-delete in 15 minutes"
+            "📂 *Chat Session Export (Metadata Only)*\n\n"
+            f"Session: `{session_id}`\n"
+            f"User A: `{user_a}`\n"
+            f"User B: `{user_b}`\n"
+            f"Started: {started_at:%Y-%m-%d %H:%M UTC}\n"
+            f"Ended: {ended_at:%Y-%m-%d %H:%M UTC}" if ended_at else "Ended: ACTIVE\n"
+            f"Duration: {duration}\n\n"
+            "⛔ Message contents are not stored.\n"
+            "🕒 Auto-delete in 15 minutes."
         ),
-        protect_content=True
+        parse_mode="Markdown",
+        protect_content=True,
     )
 
     # ── AUDIT ────────────────────────────────
-    await log_admin_action(
-        admin_id=admin_id,
-        action="READ_CHAT_EXPORT",
-        metadata={
-            "session_id": session_id,
-            "rows": len(rows),
-            "user_filter": filter_user,
-            "from": start_time.isoformat() if start_time else None,
-            "to": end_time.isoformat() if end_time else None,
-        }
-    )
+    try:
+        await log_admin_action(
+            admin_id=admin_id,
+            action="READ_CHAT_METADATA",
+            metadata={
+                "session_id": session_id,
+                "user_a": str(user_a),
+                "user_b": str(user_b),
+                "duration": duration,
+            },
+        )
+    except Exception:
+        pass
 
     # ── AUTO DELETE ──────────────────────────
     async def cleanup():
         await asyncio.sleep(AUTO_DELETE_SECONDS)
         try:
             await sent_doc.delete()
-        except:
+        except Exception:
             pass
 
     asyncio.create_task(cleanup())

@@ -2,7 +2,9 @@
 
 import json
 import logging
-from bot.core.database import execute
+from datetime import datetime, timezone
+
+from bot.core.db import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -14,16 +16,32 @@ async def log_admin_action(
 ):
     """
     Store admin actions for auditing purposes.
+    psycopg2-based (sync DB).
     """
+
+    admin_id = str(admin_id)
+    metadata_json = json.dumps(metadata or {})
+    created_at = datetime.now(timezone.utc)
+
+    conn = get_db()
     try:
-        await execute(
-            """
-            INSERT INTO admin_audit (admin_id, action, metadata)
-            VALUES ($1, $2, $3)
-            """,
-            admin_id,
-            action,
-            json.dumps(metadata or {}),
-        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO admin_audit (admin_id, action, metadata, created_at)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (
+                    admin_id,
+                    action,
+                    metadata_json,
+                    created_at,
+                ),
+            )
+            conn.commit()
+
     except Exception:
         logger.exception("Failed to log admin action")
+
+    finally:
+        conn.close()
